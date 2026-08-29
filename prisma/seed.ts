@@ -129,6 +129,16 @@ const products = [
     inStock: true,
     isAdversarial: false,
   },
+  {
+    id: "prod_gps_watch",
+    name: "GPS Running Watch Pro",
+    description: "Advanced GPS tracking with heart rate monitor, VO2 max estimation, and 14-day battery life.",
+    price: 3499,
+    category: "accessories",
+    imageUrl: null,
+    inStock: true,
+    isAdversarial: false,
+  },
 
   // ── NUTRITION ──────────────────────────────────────────────────────────────
   {
