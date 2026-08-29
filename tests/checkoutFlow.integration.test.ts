@@ -20,7 +20,12 @@ import { describe, it, expect, beforeAll } from "vitest";
 const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
 
-const hasRazorpayKeys = !!(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+const hasRazorpayKeys = !!(
+  RAZORPAY_KEY_ID && 
+  RAZORPAY_KEY_SECRET && 
+  !RAZORPAY_KEY_ID.includes("placeholder") &&
+  !RAZORPAY_KEY_SECRET.includes("placeholder")
+);
 
 describe("Razorpay integration", () => {
   beforeAll(() => {
