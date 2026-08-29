@@ -17,7 +17,7 @@ if (-not (Test-Path ".env.local")) {
     Write-Host "  RAZORPAY_KEY_ID       = rzp_test_... (from dashboard.razorpay.com)" -ForegroundColor White
     Write-Host "  RAZORPAY_KEY_SECRET   = ..." -ForegroundColor White
     Write-Host "  RAZORPAY_WEBHOOK_SECRET = ..." -ForegroundColor White
-    Write-Host "  ANTHROPIC_API_KEY     = sk-ant-... (from console.anthropic.com)" -ForegroundColor White
+    Write-Host "  GEMINI_API_KEY        = AIza... (from aistudio.google.com)" -ForegroundColor White
     Write-Host ""
     Write-Host "Press Enter after editing .env.local to continue..." -ForegroundColor Yellow
     Read-Host

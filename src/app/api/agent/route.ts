@@ -1,12 +1,12 @@
 /**
  * POST /api/agent — Main Agent Orchestrator
  *
- * Runs a Claude tool-calling loop for one conversation turn.
+ * Runs a Gemini tool-calling loop for one conversation turn.
  * The agent can call tools to search products, manage the cart,
  * check mandate status, and initiate checkout.
  *
  * SECURITY BOUNDARIES:
- * - Injection sanitizer scans user message before Claude sees it
+ * - Injection sanitizer scans user message before Gemini sees it
  * - Every tool call is logged to audit_log BEFORE execution
  * - Every tool result is logged AFTER execution
  * - Mandate engine validates EVERY cart mutation server-side
@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, Type, FunctionDeclaration, Content, Part } from "@google/genai";
 import { prisma } from "@/lib/prisma";
 import { logAction } from "@/lib/auditLog";
 import { scanUserMessage, scanProductForInjection } from "@/lib/injectionSanitizer";
@@ -23,127 +23,139 @@ import { validateCart, validateUpsellItem } from "@/lib/mandateEngine";
 import type { CartItemWithProduct } from "@/lib/mandateEngine";
 import mandateConfig from "../../../../mandate.config.json";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ---------------------------------------------------------------------------
-// Tool definitions for Claude
+// Tool definitions for Gemini
 // ---------------------------------------------------------------------------
 
-const TOOLS: Anthropic.Tool[] = [
-  {
-    name: "search_products",
-    description:
-      "Search the product catalog by query, category, or max price. Returns matching products with prices in INR.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        query: { type: "string", description: "Search term (product name or keyword)" },
-        category: {
-          type: "string",
-          enum: ["running_shoes", "apparel", "accessories", "nutrition"],
-          description: "Filter by product category",
-        },
-        maxPrice: { type: "number", description: "Maximum price in INR" },
+const searchProductsTool: FunctionDeclaration = {
+  name: "search_products",
+  description:
+    "Search the product catalog by query, category, or max price. Returns matching products with prices in INR.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: { type: Type.STRING, description: "Search term (product name or keyword)" },
+      category: {
+        type: Type.STRING,
+        description: "Filter by product category (e.g. running_shoes, apparel, accessories, nutrition)",
       },
+      maxPrice: { type: Type.NUMBER, description: "Maximum price in INR" },
     },
   },
-  {
-    name: "add_to_cart",
-    description:
-      "Add a product to the shopping cart. The mandate engine will validate this action.",
-    input_schema: {
-      type: "object" as const,
-      required: ["productId", "sessionId"],
-      properties: {
-        productId: { type: "string", description: "Product ID from the catalog" },
-        sessionId: { type: "string" },
-        quantity: { type: "number", default: 1 },
-        isUpsell: {
-          type: "boolean",
-          description: "Set to true if this is an agent-suggested upsell item",
-          default: false,
-        },
+};
+
+const addToCartTool: FunctionDeclaration = {
+  name: "add_to_cart",
+  description: "Add a product to the shopping cart. The mandate engine will validate this action.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      productId: { type: Type.STRING, description: "Product ID from the catalog" },
+      sessionId: { type: Type.STRING },
+      quantity: { type: Type.NUMBER, description: "Quantity to add" },
+      isUpsell: {
+        type: Type.BOOLEAN,
+        description: "Set to true if this is an agent-suggested upsell item",
       },
     },
+    required: ["productId", "sessionId"],
   },
-  {
-    name: "remove_from_cart",
-    description: "Remove an item from the shopping cart.",
-    input_schema: {
-      type: "object" as const,
-      required: ["cartItemId", "sessionId"],
-      properties: {
-        cartItemId: { type: "string" },
-        sessionId: { type: "string" },
+};
+
+const removeFromCartTool: FunctionDeclaration = {
+  name: "remove_from_cart",
+  description: "Remove an item from the shopping cart.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      cartItemId: { type: Type.STRING },
+      sessionId: { type: Type.STRING },
+    },
+    required: ["cartItemId", "sessionId"],
+  },
+};
+
+const proposeUpsellTool: FunctionDeclaration = {
+  name: "propose_upsell",
+  description:
+    "Suggest a complementary product to add to the cart. The mandate engine will validate whether the upsell fits within budget.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      productId: { type: Type.STRING, description: "Product to suggest" },
+      sessionId: { type: Type.STRING },
+      reason: { type: Type.STRING, description: "Why this product complements the cart" },
+    },
+    required: ["productId", "sessionId", "reason"],
+  },
+};
+
+const checkMandateTool: FunctionDeclaration = {
+  name: "check_mandate",
+  description:
+    "Check if the current cart passes all mandate constraints (budget, per-item cap, categories). Returns whether checkout is allowed.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      sessionId: { type: Type.STRING },
+      isAgentMode: { type: Type.BOOLEAN },
+    },
+    required: ["sessionId"],
+  },
+};
+
+const initiateCheckoutTool: FunctionDeclaration = {
+  name: "initiate_checkout",
+  description:
+    "Create a Razorpay order for the current cart. Returns the order details needed for payment. Requires mandate to pass first.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      sessionId: { type: Type.STRING },
+      idempotencyKey: {
+        type: Type.STRING,
+        description: "Unique key for idempotent checkout. Format: session:{id}:attempt:{n}",
       },
     },
+    required: ["sessionId", "idempotencyKey"],
   },
-  {
-    name: "propose_upsell",
-    description:
-      "Suggest a complementary product to add to the cart. The mandate engine will validate whether the upsell fits within budget.",
-    input_schema: {
-      type: "object" as const,
-      required: ["productId", "sessionId", "reason"],
-      properties: {
-        productId: { type: "string", description: "Product to suggest" },
-        sessionId: { type: "string" },
-        reason: { type: "string", description: "Why this product complements the cart" },
-      },
+};
+
+const getOrderStatusTool: FunctionDeclaration = {
+  name: "get_order_status",
+  description: "Get the current status of an order.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      orderId: { type: Type.STRING },
     },
+    required: ["orderId"],
   },
-  {
-    name: "check_mandate",
-    description:
-      "Check if the current cart passes all mandate constraints (budget, per-item cap, categories). Returns whether checkout is allowed.",
-    input_schema: {
-      type: "object" as const,
-      required: ["sessionId"],
-      properties: {
-        sessionId: { type: "string" },
-        isAgentMode: { type: "boolean", default: false },
-      },
+};
+
+const getCartTool: FunctionDeclaration = {
+  name: "get_cart",
+  description: "Get the current cart contents and total.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      sessionId: { type: Type.STRING },
     },
+    required: ["sessionId"],
   },
-  {
-    name: "initiate_checkout",
-    description:
-      "Create a Razorpay order for the current cart. Returns the order details needed for payment. Requires mandate to pass first.",
-    input_schema: {
-      type: "object" as const,
-      required: ["sessionId", "idempotencyKey"],
-      properties: {
-        sessionId: { type: "string" },
-        idempotencyKey: {
-          type: "string",
-          description:
-            "Unique key for idempotent checkout. Format: session:{id}:attempt:{n}",
-        },
-      },
-    },
-  },
-  {
-    name: "get_order_status",
-    description: "Get the current status of an order.",
-    input_schema: {
-      type: "object" as const,
-      required: ["orderId"],
-      properties: {
-        orderId: { type: "string" },
-      },
-    },
-  },
-  {
-    name: "get_cart",
-    description: "Get the current cart contents and total.",
-    input_schema: {
-      type: "object" as const,
-      required: ["sessionId"],
-      properties: {
-        sessionId: { type: "string" },
-      },
-    },
-  },
+};
+
+const TOOLS = [
+  searchProductsTool,
+  addToCartTool,
+  removeFromCartTool,
+  proposeUpsellTool,
+  checkMandateTool,
+  initiateCheckoutTool,
+  getOrderStatusTool,
+  getCartTool,
 ];
 
 // ---------------------------------------------------------------------------
@@ -184,7 +196,6 @@ async function executeTool(
       const scannedProducts = products.map((p) => {
         const scan = scanProductForInjection(p as Record<string, unknown>);
         if (!scan.clean) {
-          // Already logged in catalog endpoint, but log again for traceability
           logAction({
             sessionId,
             actor: "mandate_engine",
@@ -226,7 +237,6 @@ async function executeTool(
       if (!product) return { error: `Product ${productId} not found` };
       if (!product.inStock) return { error: `${product.name} is out of stock` };
 
-      // Get current cart total for upsell validation
       const currentCart = await prisma.cartItem.findMany({
         where: { sessionId },
         include: { product: true },
@@ -236,7 +246,6 @@ async function executeTool(
         0
       );
 
-      // Mandate check BEFORE adding
       const isAgentMode = actor === "autonomous_buyer_agent";
       const upsellCheck = validateUpsellItem(
         product as import("@/types").Product,
@@ -253,7 +262,6 @@ async function executeTool(
         };
       }
 
-      // Upsert cart item
       const existing = await prisma.cartItem.findFirst({
         where: { sessionId, productId },
       });
@@ -370,7 +378,6 @@ async function executeTool(
     case "initiate_checkout": {
       const { idempotencyKey } = toolInput as { idempotencyKey: string };
 
-      // Call checkout endpoint server-to-server
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
       const response = await fetch(`${baseUrl}/api/checkout`, {
         method: "POST",
@@ -478,16 +485,15 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Use sanitized message for LLM (injection attempt noted but not honored)
     const safeMessage = injectionCheck.sanitizedText;
 
     // ── Build messages ─────────────────────────────────────────────────────
-    const messages: Anthropic.MessageParam[] = [
+    const messages: Content[] = [
       ...conversationHistory.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
       })),
-      { role: "user", content: safeMessage },
+      { role: "user", parts: [{ text: safeMessage }] },
     ];
 
     // ── Tool-calling loop ──────────────────────────────────────────────────
@@ -496,10 +502,11 @@ export async function POST(request: NextRequest) {
     let loopMessages = [...messages];
 
     for (let iteration = 0; iteration < 10; iteration++) {
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
-        max_tokens: 4096,
-        system: `You are CartGuard, an AI shopping assistant for a running gear store.
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: loopMessages,
+        config: {
+          systemInstruction: `You are CartGuard, an AI shopping assistant for a running gear store.
 
 IMPORTANT RULES:
 1. You help users discover and purchase running gear within their budget.
@@ -515,36 +522,39 @@ IMPORTANT RULES:
 Available budget: ₹4,000 max. Per-item cap: ₹2,500. Human confirm required above ₹3,000 (human mode only).
 
 Always be helpful, suggest relevant gear, and explain mandate decisions clearly to the user.`,
-        tools: TOOLS,
-        messages: loopMessages,
+          tools: [{ functionDeclarations: TOOLS }],
+        },
       });
 
-      // Collect text
-      for (const block of response.content) {
-        if (block.type === "text") {
-          finalText = block.text;
-        }
+      const responseMessage = response.candidates?.[0]?.content;
+      if (!responseMessage) break;
+
+      // Extract text part if any
+      const textPart = responseMessage.parts?.find((p) => p.text);
+      if (textPart && textPart.text) {
+        finalText += (finalText ? "\n\n" : "") + textPart.text;
       }
 
-      // Handle tool calls
-      if (response.stop_reason === "tool_use") {
-        const toolUseBlocks = response.content.filter(
-          (b) => b.type === "tool_use"
-        ) as Anthropic.ToolUseBlock[];
+      // Add assistant response to history
+      loopMessages.push(responseMessage);
 
-        // Add assistant message to loop
-        loopMessages.push({ role: "assistant", content: response.content });
+      // Handle function calls
+      const functionCalls = responseMessage.parts?.filter((p) => p.functionCall) || [];
+      
+      if (functionCalls.length > 0) {
+        const functionResponses: Part[] = [];
 
-        const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
-
-        for (const toolUse of toolUseBlocks) {
-          const toolInput = toolUse.input as Record<string, unknown>;
+        for (const callPart of functionCalls) {
+          const toolCall = callPart.functionCall;
+          if (!toolCall) continue;
+          
+          const toolInput = toolCall.args || {};
 
           // Log BEFORE execution
           await logAction({
             sessionId,
             actor,
-            tool: toolUse.name,
+            tool: toolCall.name || "unknown",
             input: toolInput,
             decision: undefined,
             reason: "Tool call initiated by agent",
@@ -552,8 +562,8 @@ Always be helpful, suggest relevant gear, and explain mandate decisions clearly 
 
           // Execute tool
           const result = await executeTool(
-            toolUse.name,
-            toolInput,
+            toolCall.name || "unknown",
+            toolInput as Record<string, unknown>,
             sessionId,
             actor
           );
@@ -573,7 +583,7 @@ Always be helpful, suggest relevant gear, and explain mandate decisions clearly 
           await logAction({
             sessionId,
             actor,
-            tool: `${toolUse.name}_result`,
+            tool: `${toolCall.name}_result`,
             input: toolInput,
             output: result,
             decision: decision as "allowed" | "blocked" | "requires_human_confirm",
@@ -585,21 +595,23 @@ Always be helpful, suggest relevant gear, and explain mandate decisions clearly 
           });
 
           toolResults.push({
-            tool: toolUse.name,
+            tool: toolCall.name || "unknown",
             input: toolInput,
             output: result,
           });
 
-          toolResultBlocks.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(result),
+          functionResponses.push({
+            functionResponse: {
+              name: toolCall.name || "unknown",
+              response: result as Record<string, unknown>,
+            },
           });
         }
 
-        loopMessages.push({ role: "user", content: toolResultBlocks });
+        // Add tool responses back to the model
+        loopMessages.push({ role: "user", parts: functionResponses });
       } else {
-        // No more tool calls — done
+        // No function calls, loop is done
         break;
       }
     }

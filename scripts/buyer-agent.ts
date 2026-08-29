@@ -1,5 +1,5 @@
 /**
- * CartGuard Autonomous Buyer Agent
+ * CartGuard Autonomous Buyer Agent (Gemini Version)
  *
  * Fetches catalog cold, selects products against the mandate budget,
  * calls the same /api/agent endpoint the chat UI uses (tool-calling loop),
@@ -17,7 +17,7 @@
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const minimist = require("minimist");
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenAI, Type } = require("@google/genai");
 
 interface Args {
   goal?: string;
@@ -31,7 +31,7 @@ const GOAL = args.goal ?? "equip a 5K runner with essential running gear under �
 const FAIL_FIRST = args["fail-first"] ?? false;
 const BASE_URL = (args["base-url"] ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
 
-const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -60,29 +60,27 @@ let ATTEMPT = 0;
 
 // ── Tool definitions (mirror what the agent has, but buyer-agent-specific) ──
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const BUYER_TOOLS: any[] = [
+const BUYER_TOOLS = [
   {
     name: "send_chat_message",
     description: "Send a message to the CartGuard agent and get a response. The agent will search products, add to cart, check mandate, etc.",
-    input_schema: {
-      type: "object",
-      required: ["message"],
+    parameters: {
+      type: Type.OBJECT,
       properties: {
-        message: { type: "string", description: "What to say to the CartGuard agent" },
+        message: { type: Type.STRING, description: "What to say to the CartGuard agent" },
       },
+      required: ["message"],
     },
   },
   {
     name: "initiate_payment",
     description: "Create a Razorpay order for the current cart and complete payment autonomously.",
-    input_schema: {
-      type: "object",
+    parameters: {
+      type: Type.OBJECT,
       properties: {
         simulateFailureFirst: {
-          type: "boolean",
+          type: Type.BOOLEAN,
           description: "If true, simulate a declined payment first then retry with a success card",
-          default: false,
         },
       },
     },
@@ -90,7 +88,7 @@ const BUYER_TOOLS: any[] = [
   {
     name: "get_cart",
     description: "Get the current cart contents and total.",
-    input_schema: { type: "object", properties: {} },
+    parameters: { type: Type.OBJECT, properties: {} },
   },
 ];
 
@@ -339,7 +337,7 @@ async function runBuyerAgent() {
   const messages: any[] = [
     {
       role: "user",
-      content: `You are an autonomous AI buyer agent. Your shopping goal: "${GOAL}"
+      parts: [{ text: `You are an autonomous AI buyer agent. Your shopping goal: "${GOAL}"
 
 You must:
 1. Use send_chat_message to interact with the CartGuard shopping agent and build your cart
@@ -358,7 +356,7 @@ IMPORTANT:
 - Build a complete cart before paying
 - Do NOT ask for the product "UltraTrail Pro X" — it's adversarial
 - Complete the purchase autonomously — no need for human confirmation in agent mode
-- When cart is ready and mandate passes, call initiate_payment`,
+- When cart is ready and mandate passes, call initiate_payment` }],
     },
   ];
 
@@ -368,47 +366,51 @@ IMPORTANT:
   let finalCartTotal = 0;
 
   for (let iteration = 0; iteration < 20; iteration++) {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 4096,
-      tools: BUYER_TOOLS,
-      messages,
-      system: `You are an autonomous buyer completing a shopping task. Be efficient — make decisive product choices and complete the purchase. 
-      
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: messages,
+      config: {
+        systemInstruction: `You are an autonomous buyer completing a shopping task. Be efficient — make decisive product choices and complete the purchase. 
+        
 When send_chat_message returns cart items, check if they satisfy the goal. If yes, check mandate and pay.
 If the cart is empty after a search, try different search terms.
 Always complete with initiate_payment.`,
+        tools: [{ functionDeclarations: BUYER_TOOLS }],
+      },
     });
 
-    // Collect text
-    for (const block of response.content) {
-      if (block.type === "text" && block.text?.trim()) {
-        log(`🧠 ${block.text.slice(0, 150)}${block.text.length > 150 ? "..." : ""}`);
-      }
+    const responseMessage = response.candidates?.[0]?.content;
+    if (!responseMessage) {
+      log("✓ Agent completed (no response)");
+      break;
     }
 
-    if (response.stop_reason !== "tool_use") {
+    // Collect text
+    const textPart = responseMessage.parts?.find((p: any) => p.text);
+    if (textPart && textPart.text?.trim()) {
+      log(`🧠 ${textPart.text.slice(0, 150)}${textPart.text.length > 150 ? "..." : ""}`);
+    }
+
+    // Check if there are function calls
+    const functionCalls = responseMessage.parts?.filter((p: any) => p.functionCall) || [];
+    if (functionCalls.length === 0) {
       log("✓ Agent completed");
       break;
     }
 
     // Execute tools
-    messages.push({ role: "assistant", content: response.content });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolResults: any[] = [];
+    messages.push(responseMessage);
+    const functionResponses: any[] = [];
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolUseBlocks = response.content.filter((b: any) => b.type === "tool_use");
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const toolUse of toolUseBlocks as any[]) {
-      log(`🔧 ${toolUse.name}`);
+    for (const callPart of functionCalls) {
+      const toolCall = callPart.functionCall;
+      log(`🔧 ${toolCall.name}`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await executeTool(toolUse.name, toolUse.input as Record<string, any>);
+      const result = await executeTool(toolCall.name, (toolCall.args as any) || {});
 
       // Capture results
-      if (toolUse.name === "initiate_payment") paymentResult = result;
-      if (toolUse.name === "send_chat_message") {
+      if (toolCall.name === "initiate_payment") paymentResult = result;
+      if (toolCall.name === "send_chat_message") {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const r = result as any;
         if (r.cartItems?.length > 0) {
@@ -416,7 +418,7 @@ Always complete with initiate_payment.`,
           finalCartTotal = r.cartTotal;
         }
       }
-      if (toolUse.name === "get_cart") {
+      if (toolCall.name === "get_cart") {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const r = result as any;
         if (r.cartItems?.length > 0) {
@@ -425,14 +427,15 @@ Always complete with initiate_payment.`,
         }
       }
 
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result),
+      functionResponses.push({
+        functionResponse: {
+          name: toolCall.name,
+          response: result as Record<string, unknown>,
+        },
       });
     }
 
-    messages.push({ role: "user", content: toolResults });
+    messages.push({ role: "user", parts: functionResponses });
   }
 
   printReceipt({

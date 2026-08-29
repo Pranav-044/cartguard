@@ -16,7 +16,7 @@ jobs:
       RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID || 'rzp_test_placeholder' }}
       RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET || 'placeholder_secret' }}
       RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET || 'placeholder_webhook' }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'sk-ant-placeholder' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'AIza-placeholder' }}
       NEXT_PUBLIC_RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID || 'rzp_test_placeholder' }}
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       ENABLE_TEST_PAYMENT: "true"
@@ -59,7 +59,7 @@ jobs:
       RAZORPAY_KEY_ID: rzp_test_placeholder
       RAZORPAY_KEY_SECRET: placeholder_secret
       RAZORPAY_WEBHOOK_SECRET: placeholder_webhook
-      ANTHROPIC_API_KEY: sk-ant-placeholder
+      GEMINI_API_KEY: AIza-placeholder
       NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_placeholder
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       ENABLE_TEST_PAYMENT: "true"
