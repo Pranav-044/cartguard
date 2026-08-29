@@ -23,7 +23,8 @@ import { validateCart, validateUpsellItem } from "@/lib/mandateEngine";
 import type { CartItemWithProduct } from "@/lib/mandateEngine";
 import mandateConfig from "../../../../mandate.config.json";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// We will instantiate this inside the request handler so it always gets the latest env vars
+let ai: GoogleGenAI;
 
 // ---------------------------------------------------------------------------
 // Tool definitions for Gemini
@@ -445,6 +446,14 @@ async function executeTool(
 
 export async function POST(request: NextRequest) {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is missing! Please make sure you added it to your .env.local file and restarted the server.");
+    }
+    
+    if (!ai) {
+      ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    }
+
     const body = await request.json();
     const {
       sessionId: incomingSessionId,
