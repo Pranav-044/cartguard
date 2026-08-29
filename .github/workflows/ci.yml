@@ -1,0 +1,122 @@
+name: CartGuard CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: file:./test.db
+      RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID || 'rzp_test_placeholder' }}
+      RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET || 'placeholder_secret' }}
+      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET || 'placeholder_webhook' }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'sk-ant-placeholder' }}
+      NEXT_PUBLIC_RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID || 'rzp_test_placeholder' }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      ENABLE_TEST_PAYMENT: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run DB migrations (dev — creates migration if needed)
+        run: npx prisma migrate dev --name ci --skip-seed
+
+      - name: Seed database
+        run: npm run seed
+
+      - name: Run unit tests (mandate engine — 29 tests)
+        run: npm test
+
+      - name: Run integration tests (injection + idempotency + signatures)
+        run: npm run test:integration
+        # Razorpay API tests auto-skip if secrets not set
+
+  build:
+    name: Production Build Check
+    runs-on: ubuntu-latest
+    needs: test
+
+    env:
+      DATABASE_URL: file:./build.db
+      RAZORPAY_KEY_ID: rzp_test_placeholder
+      RAZORPAY_KEY_SECRET: placeholder_secret
+      RAZORPAY_WEBHOOK_SECRET: placeholder_webhook
+      ANTHROPIC_API_KEY: sk-ant-placeholder
+      NEXT_PUBLIC_RAZORPAY_KEY_ID: rzp_test_placeholder
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      ENABLE_TEST_PAYMENT: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          path: .next/
+          retention-days: 3
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t cartguard:ci .
+
+      - name: Verify image starts
+        run: |
+          docker run -d \
+            --name cartguard-test \
+            -p 3000:3000 \
+            -e DATABASE_URL=file:/app/data/cartguard.db \
+            -e RAZORPAY_KEY_ID=rzp_test_placeholder \
+            -e RAZORPAY_KEY_SECRET=placeholder_secret \
+            -e RAZORPAY_WEBHOOK_SECRET=placeholder_webhook \
+            -e ANTHROPIC_API_KEY=sk-ant-placeholder \
+            -e NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_placeholder \
+            -e NEXT_PUBLIC_APP_URL=http://localhost:3000 \
+            -e ENABLE_TEST_PAYMENT=true \
+            cartguard:ci
+          sleep 15
+          curl -f http://localhost:3000/api/catalog.json | grep totalProducts
+          docker stop cartguard-test

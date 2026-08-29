@@ -1,0 +1,20 @@
+{
+  "budgetCapINR": 4000,
+  "perItemCapINR": 2500,
+  "categoryAllowlist": [
+    "running_shoes",
+    "running_gear",
+    "apparel",
+    "accessories",
+    "nutrition"
+  ],
+  "humanConfirmThresholdINR": 3000,
+  "maxCartItems": 10,
+  "maxQuantityPerItem": 3,
+  "currency": "INR",
+  "buyerAgentOverrides": {
+    "budgetCapINR": 4000,
+    "humanConfirmThresholdINR": 999999,
+    "note": "Buyer agent has no human-confirm gate — it operates within budget autonomously"
+  }
+}

@@ -1,0 +1,74 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id            String     @id @default(cuid())
+  name          String
+  description   String
+  price         Float
+  category      String
+  imageUrl      String?
+  inStock       Boolean    @default(true)
+  isAdversarial Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  cartItems     CartItem[]
+}
+
+model Session {
+  id        String     @id @default(cuid())
+  actor     String     // "human_chat" | "autonomous_buyer_agent"
+  goal      String?
+  status    String     @default("active") // active | completed | abandoned
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  cartItems CartItem[]
+  orders    Order[]
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  sessionId String
+  productId String
+  quantity  Int      @default(1)
+  isUpsell  Boolean  @default(false)
+  addedAt   DateTime @default(now())
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+model Order {
+  id                String   @id @default(cuid())
+  sessionId         String
+  idempotencyKey    String   @unique
+  razorpayOrderId   String?  @unique
+  razorpayPaymentId String?  @unique
+  amount            Float
+  currency          String   @default("INR")
+  status            String   @default("created") // created | attempted | paid | failed | refunded
+  refundId          String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  session           Session  @relation(fields: [sessionId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  sessionId  String?
+  actor      String   // "human_chat" | "autonomous_buyer_agent" | "mandate_engine" | "webhook" | "reconciler"
+  tool       String   // tool name / action name
+  inputJson  String   // JSON stringified input
+  outputJson String?  // JSON stringified output/result
+  decision   String?  // "allowed" | "blocked" | "requires_human_confirm"
+  reason     String?  // human-readable explanation
+  createdAt  DateTime @default(now())
+}

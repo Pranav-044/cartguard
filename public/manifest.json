@@ -1,0 +1,16 @@
+{
+  "name": "CartGuard",
+  "short_name": "CartGuard",
+  "description": "Bounded, Agent-to-Agent Checkout for Razorpay",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060612",
+  "theme_color": "#8b5cf6",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+CartGuard/
+node_modules/
+.next/
+*.db
+*.db-journal
+.env.local
+.env*.local
+dist/
+.DS_Store
+Thumbs.db
+*.log
+prisma/migrations/

@@ -1,0 +1,41 @@
+{
+  "name": "cartguard",
+  "version": "1.0.0",
+  "description": "Bounded, agent-to-agent checkout system for Razorpay",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed": "npx ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",
+    "buyer-agent": "npx ts-node --compiler-options '{\"module\":\"CommonJS\"}' scripts/buyer-agent.ts",
+    "test": "vitest run tests/mandateEngine.test.ts",
+    "test:integration": "vitest run tests/checkoutFlow.integration.test.ts",
+    "test:all": "vitest run",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@prisma/client": "^5.16.1",
+    "razorpay": "^2.9.2",
+    "@anthropic-ai/sdk": "^0.26.0",
+    "minimist": "^1.2.8",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "prisma": "^5.16.1",
+    "typescript": "^5.5.3",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/minimist": "^1.2.5",
+    "vitest": "^1.6.0",
+    "ts-node": "^10.9.2",
+    "@vitejs/plugin-react": "^4.3.1"
+  },
+  "prisma": {
+    "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
+  }
+}
